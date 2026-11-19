@@ -35,6 +35,11 @@ public final class ConfigLoader {
     public static final String DISCORD_TOKEN_ENV = "LOGIFY_DISCORD_TOKEN";
 
     private static final Pattern TABLE_PREFIX = Pattern.compile("[A-Za-z0-9_]{0,32}");
+    /** Имя slash-команды по правилам Discord. */
+    private static final Pattern COMMAND_NAME = Pattern.compile("[-_\\p{L}\\p{N}]{1,32}");
+    /** Ограничения Discord на длину описаний команд и подписей кнопок. */
+    private static final int MAX_DESCRIPTION_LENGTH = 100;
+    private static final int MAX_BUTTON_LABEL_LENGTH = 80;
 
     private final Toml toml;
     private final Toml template;
@@ -117,8 +122,13 @@ public final class ConfigLoader {
 
     private DiscordSettings discord() {
         String command = string("discord.command").strip();
-        if (command.isEmpty() || command.chars().anyMatch(Character::isWhitespace)) {
-            throw new ConfigException("discord.command должна быть одним словом без пробелов, например \"/r\"");
+        if (command.startsWith("/")) {
+            command = command.substring(1);
+        }
+        // Discord принимает имена команд только в нижнем регистре
+        command = command.toLowerCase(Locale.ROOT);
+        if (!COMMAND_NAME.matcher(command).matches()) {
+            throw new ConfigException("discord.command должна состоять из букв, цифр, \"-\" и \"_\" (до 32 символов), например \"/r\"");
         }
         return new DiscordSettings(
                 withEnvironment(DISCORD_TOKEN_ENV, string("discord.token")).strip(),
@@ -183,6 +193,9 @@ public final class ConfigLoader {
 
     private DiscordMessages discordMessages() {
         return new DiscordMessages(
+                limited("discord-messages.command-description", MAX_DESCRIPTION_LENGTH),
+                limited("discord-messages.command-code-description", MAX_DESCRIPTION_LENGTH),
+                requireNotBlank("discord-messages.registration-wrong-channel"),
                 requireNotBlank("discord-messages.registration-success"),
                 requireNotBlank("discord-messages.registration-invalid-code"),
                 requireNotBlank("discord-messages.registration-usage"),
@@ -190,11 +203,10 @@ public final class ConfigLoader {
                 requireNotBlank("discord-messages.registration-already-registered"),
                 requireNotBlank("discord-messages.registration-rate-limited"),
                 requireNotBlank("discord-messages.registration-error"),
-                requireNotBlank("discord-messages.direct-messages-closed"),
                 requireNotBlank("discord-messages.login-request-title"),
                 requireNotBlank("discord-messages.login-request"),
-                requireNotBlank("discord-messages.login-approve-button"),
-                requireNotBlank("discord-messages.login-deny-button"),
+                limited("discord-messages.login-approve-button", MAX_BUTTON_LABEL_LENGTH),
+                limited("discord-messages.login-deny-button", MAX_BUTTON_LABEL_LENGTH),
                 requireNotBlank("discord-messages.login-approved"),
                 requireNotBlank("discord-messages.login-denied"),
                 requireNotBlank("discord-messages.login-expired")
@@ -218,6 +230,14 @@ public final class ConfigLoader {
         String value = string(key);
         if (value.isBlank()) {
             throw new ConfigException(key + " не может быть пустым");
+        }
+        return value;
+    }
+
+    private String limited(String key, int maxLength) {
+        String value = requireNotBlank(key);
+        if (value.length() > maxLength) {
+            throw new ConfigException(key + " должен быть не длиннее " + maxLength + " символов");
         }
         return value;
     }

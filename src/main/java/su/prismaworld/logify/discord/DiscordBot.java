@@ -6,26 +6,24 @@ import java.util.EnumSet;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.TimeUnit;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
-import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.components.actionrow.ActionRow;
 import net.dv8tion.jda.api.components.buttons.Button;
 import net.dv8tion.jda.api.entities.Activity;
-import net.dv8tion.jda.api.entities.Member;
-import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.MessageEmbed;
-import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildMessageChannel;
-import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
 import net.dv8tion.jda.api.events.session.ReadyEvent;
 import net.dv8tion.jda.api.events.session.ShutdownEvent;
-import net.dv8tion.jda.api.exceptions.ErrorHandler;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.exceptions.InvalidTokenException;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.commands.OptionType;
+import net.dv8tion.jda.api.interactions.commands.build.Commands;
+import net.dv8tion.jda.api.interactions.commands.build.OptionData;
+import net.dv8tion.jda.api.interactions.commands.build.SlashCommandData;
 import net.dv8tion.jda.api.requests.CloseCode;
 import net.dv8tion.jda.api.requests.ErrorResponse;
 import net.dv8tion.jda.api.requests.GatewayIntent;
@@ -37,12 +35,17 @@ import su.prismaworld.logify.config.LogifyConfig.DiscordSettings;
 import su.prismaworld.logify.text.Texts;
 
 /**
- * Discord-бот: запускается вместе с прокси, принимает команды регистрации и отправляет запросы на вход.
+ * Discord-бот: запускается вместе с прокси, регистрирует slash-команду регистрации и отправляет запросы на вход.
  */
 public final class DiscordBot {
 
+    /** Параметр slash-команды регистрации с кодом. */
+    public static final String CODE_OPTION = "code";
+
     private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(5);
-    private static final long CHANNEL_NOTICE_LIFETIME_SECONDS = 15;
+    /** Код вводится как ABC-DEF или ABCDEF. */
+    private static final int MIN_CODE_LENGTH = 6;
+    private static final int MAX_CODE_LENGTH = 7;
 
     private final DiscordSettings settings;
     private final DiscordMessages messages;
@@ -50,7 +53,7 @@ public final class DiscordBot {
 
     private volatile @Nullable JDA jda;
     private volatile boolean ready;
-    private volatile boolean registrationChannelAvailable;
+    private volatile boolean registrationAvailable;
     private volatile boolean stopping;
 
     public DiscordBot(DiscordSettings settings, DiscordMessages messages, Logger logger) {
@@ -71,7 +74,8 @@ public final class DiscordBot {
     }
 
     private void login(Object[] listeners) {
-        JDABuilder builder = JDABuilder.createLight(settings.token(), GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT)
+        // Slash-команды и кнопки приходят без дополнительных интентов: читать сообщения в каналах не нужно
+        JDABuilder builder = JDABuilder.createLight(settings.token(), EnumSet.noneOf(GatewayIntent.class))
                 .setEnableShutdownHook(false)
                 .addEventListeners(new LifecycleListener())
                 .addEventListeners(listeners);
@@ -104,16 +108,26 @@ public final class DiscordBot {
     }
 
     /**
-     * Готов ли бот принимать команды регистрации: подключён и видит канал регистрации.
+     * Готов ли бот принимать команды регистрации: подключён, видит канал регистрации и зарегистрировал slash-команду.
      */
     public boolean isRegistrationAvailable() {
-        return isReady() && registrationChannelAvailable;
+        return isReady() && registrationAvailable;
     }
 
     public long registrationChannelId() {
         return settings.registrationChannelId();
     }
 
+    /**
+     * Имя slash-команды регистрации без "/".
+     */
+    public String commandName() {
+        return settings.commandName();
+    }
+
+    /**
+     * Команда регистрации в том виде, в котором её набирают в Discord, например {@code /r}.
+     */
     public String command() {
         return settings.command();
     }
@@ -126,6 +140,13 @@ public final class DiscordBot {
         GuildMessageChannel channel = instance == null ? null
                 : instance.getChannelById(GuildMessageChannel.class, settings.registrationChannelId());
         return channel == null ? "#" + settings.registrationChannelId() : "#" + channel.getName();
+    }
+
+    /**
+     * Ссылка на канал регистрации в разметке Discord.
+     */
+    public String registrationChannelMention() {
+        return "<#" + Long.toUnsignedString(settings.registrationChannelId()) + ">";
     }
 
     /**
@@ -184,27 +205,6 @@ public final class DiscordBot {
                 .build();
     }
 
-    /**
-     * Отправляет пользователю личное сообщение. Если личные сообщения закрыты, на время пишет об этом
-     * в {@code fallback} с упоминанием пользователя.
-     */
-    public void notifyUser(User user, MessageChannel fallback, String text) {
-        user.openPrivateChannel()
-                .flatMap(channel -> channel.sendMessage(text))
-                .queue(null, new ErrorHandler()
-                        .handle(ErrorResponse.CANNOT_SEND_TO_USER, error -> notifyInChannel(user, fallback))
-                        .handle(Throwable.class, error -> logger.warn("Не удалось отправить личное сообщение {}", user.getId(), error)));
-    }
-
-    private void notifyInChannel(User user, MessageChannel channel) {
-        String text = Texts.format(messages.directMessagesClosed(), Map.of("mention", user.getAsMention()));
-        channel.sendMessage(text)
-                .setAllowedMentions(EnumSet.of(Message.MentionType.USER))
-                .queue(message -> message.delete().queueAfter(CHANNEL_NOTICE_LIFETIME_SECONDS, TimeUnit.SECONDS,
-                                null, new ErrorHandler().ignore(ErrorResponse.UNKNOWN_MESSAGE)),
-                        error -> logger.warn("Не удалось отправить сообщение в канал регистрации", error));
-    }
-
     public void shutdown() {
         stopping = true;
         ready = false;
@@ -246,37 +246,44 @@ public final class DiscordBot {
 
         @Override
         public void onReady(ReadyEvent event) {
+            ready = true;
+            logger.info("Discord-бот {} подключён", event.getJDA().getSelfUser().getName());
             GuildMessageChannel channel = event.getJDA()
                     .getChannelById(GuildMessageChannel.class, settings.registrationChannelId());
             if (channel == null) {
                 logger.error("Канал регистрации {} не найден. Проверьте discord.registration-channel-id и что бот добавлен на сервер",
                         settings.registrationChannelId());
-            } else {
-                Member self = channel.getGuild().getSelfMember();
-                EnumSet<Permission> required = EnumSet.of(Permission.VIEW_CHANNEL, Permission.MESSAGE_SEND,
-                        Permission.MESSAGE_MANAGE, Permission.MESSAGE_HISTORY);
-                EnumSet<Permission> missing = EnumSet.noneOf(Permission.class);
-                for (Permission permission : required) {
-                    if (!self.hasPermission(channel, permission)) {
-                        missing.add(permission);
-                    }
-                }
-                if (!missing.isEmpty()) {
-                    logger.warn("У бота нет прав в канале #{}: {}", channel.getName(), missing);
-                }
-                registrationChannelAvailable = true;
+                return;
             }
-            ready = true;
-            logger.info("Discord-бот {} подключён", event.getJDA().getSelfUser().getName());
+            registerCommand(channel.getGuild(), channel);
+        }
+
+        /**
+         * Заменяет slash-команды этого бота на сервере командой регистрации. Команды других ботов не затрагиваются,
+         * а устаревшая команда (например, после смены discord.command) удаляется.
+         */
+        private void registerCommand(Guild guild, GuildMessageChannel channel) {
+            SlashCommandData command = Commands.slash(settings.commandName(), messages.commandDescription())
+                    .addOptions(new OptionData(OptionType.STRING, CODE_OPTION, messages.commandCodeDescription(), true)
+                            .setMinLength(MIN_CODE_LENGTH)
+                            .setMaxLength(MAX_CODE_LENGTH));
+            guild.updateCommands().addCommands(command).queue(
+                    registered -> {
+                        registrationAvailable = true;
+                        logger.info("Команда {} доступна в канале #{} на сервере {}",
+                                settings.command(), channel.getName(), guild.getName());
+                    },
+                    error -> logger.error("Не удалось зарегистрировать команду {} на сервере {}. "
+                                    + "Пригласите бота заново с правом applications.commands",
+                            settings.command(), guild.getName(), error));
         }
 
         @Override
         public void onShutdown(ShutdownEvent event) {
             ready = false;
-            if (event.getCloseCode() == CloseCode.DISALLOWED_INTENTS) {
-                logger.error("Discord отклонил подключение: включите Message Content Intent в Discord Developer Portal -> Bot");
-            } else if (!stopping) {
-                logger.error("Discord-бот отключился: {}", event.getCloseCode());
+            if (!stopping) {
+                CloseCode code = event.getCloseCode();
+                logger.error("Discord-бот отключился: {}", code == null ? "соединение закрыто" : code.getMeaning());
             }
         }
     }

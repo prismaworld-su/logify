@@ -78,6 +78,24 @@ class ConfigLoaderTest {
     }
 
     @Test
+    void normalizesSlashCommandName() {
+        assertEquals("r", parse("").discord().commandName());
+        assertEquals("register", parse("[discord]\ncommand = \"register\"").discord().commandName());
+        assertEquals("reg", parse("[discord]\ncommand = \"/Reg\"").discord().commandName());
+        assertEquals("/reg", parse("[discord]\ncommand = \"/Reg\"").discord().command());
+    }
+
+    @Test
+    void rejectsInvalidSlashCommands() {
+        assertThrows(ConfigException.class, () -> parse("[discord]\ncommand = \"/\""));
+        assertThrows(ConfigException.class, () -> parse("[discord]\ncommand = \"/r code\""));
+        assertThrows(ConfigException.class, () -> parse("[discord]\ncommand = \"/r!\""));
+        assertThrows(ConfigException.class, () -> parse("[discord]\ncommand = \"/" + "r".repeat(33) + "\""));
+        assertThrows(ConfigException.class, () -> parse("[discord-messages]\ncommand-description = \"" + "a".repeat(101) + "\""));
+        assertThrows(ConfigException.class, () -> parse("[discord-messages]\nlogin-approve-button = \"" + "a".repeat(81) + "\""));
+    }
+
+    @Test
     void environmentOverridesSecrets() {
         LogifyConfig config = parse("""
                 [database]
