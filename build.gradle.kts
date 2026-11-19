@@ -47,7 +47,7 @@ dependencies {
     implementation("com.zaxxer:HikariCP:7.1.0") {
         exclude(group = "org.slf4j")
     }
-    implementation("org.mariadb.jdbc:mariadb-java-client:3.5.11")
+    implementation("org.mariadb.jdbc:mariadb-java-client:4.0.0")
 
     testImplementation("com.velocitypowered:velocity-api:$velocityVersion")
     testImplementation("net.elytrium:limboapi:$limboApiVersion")
