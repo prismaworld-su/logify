@@ -1,0 +1,23 @@
+# Раз в неделю открывает PR с обновлениями. Каждый такой PR проверяет build.yml.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: [ "*" ]
+
+  # Gradle-плагины (shadow, run-velocity) и зависимости из build.gradle.kts.
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+    groups:
+      gradle:
+        patterns: [ "*" ]
