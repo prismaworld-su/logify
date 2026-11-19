@@ -10,8 +10,10 @@ The Discord bot runs inside the proxy: no separate process is needed.
 
 1. A player joins with a nickname that is not registered yet and lands in the waiting world.
 2. The chat shows a command with a one-time code, for example `/r AZA-AXF`. Clicking it copies it to the clipboard.
-3. The player sends the command to the registration channel on the Discord server.
-4. The bot deletes the message from the channel, links the nickname to the sender's Discord account and confirms it in a direct message. The player is let through to the server.
+3. The player pastes it into the registration channel on the Discord server. `/r` is a Discord slash command with a `code` parameter, so it can also be typed as `/r` and filled in from the command picker.
+4. The bot links the nickname to the sender's Discord account and answers right in the channel with an ephemeral message that only the sender sees. The player is let through to the server.
+
+A slash command leaves no message in the channel, so the channel stays clean, and nobody else sees the codes or the answers. The command works only in the registration channel; elsewhere the bot answers with a hint where to use it.
 
 The code is valid until the registration timeout runs out (5 minutes by default). A Discord user can link a limited number of nicknames (one by default), and the number of commands per minute is limited to prevent guessing codes.
 
@@ -43,12 +45,13 @@ After an approved login, joining again from the same IP does not need approval f
 ### Discord bot
 
 1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications) and open **Bot**.
-2. Turn on **Message Content Intent**. Without it Discord refuses the connection, and the proxy log says so.
-3. Copy the token (**Reset Token**).
-4. Invite the bot to your server: **OAuth2 → URL Generator**, scope `bot`, permissions **View Channels**, **Send Messages**, **Manage Messages** and **Read Message History**.
-5. Create a registration channel and copy its ID (turn on Developer Mode in Discord, then right-click the channel → **Copy Channel ID**). The bot needs the permissions above in this channel; it warns in the log about missing ones.
+2. Copy the token (**Reset Token**). No privileged intents are needed.
+3. Invite the bot to your server: **OAuth2 → URL Generator**, scopes `bot` and `applications.commands`. The bot needs no channel permissions.
+4. Create a registration channel and copy its ID (turn on Developer Mode in Discord, then right-click the channel → **Copy Channel ID**). Players need the **Use Application Commands** permission there, which members have by default.
 
-Players must allow direct messages from server members, otherwise the bot cannot send them login requests and registration results. Logify disconnects such players with an explanation, and answers to registration commands go to the registration channel for 15 seconds instead.
+On start the bot registers the registration command on the server of that channel. It replaces the bot's own slash commands on that server, so use a separate bot for Logify.
+
+Login requests arrive as direct messages, so players must allow direct messages from server members. Logify disconnects players whose direct messages are closed and tells them why.
 
 ### Database
 
@@ -82,12 +85,12 @@ Secrets can be passed through environment variables instead of the file, which k
 | Section | Contents |
 |---|---|
 | `[database]` | MariaDB connection, table prefix, pool size |
-| `[discord]` | Bot token, registration channel, registration command (`/r` by default), bot status |
+| `[discord]` | Bot token, registration channel, registration slash command (`/r` by default), bot status |
 | `[auth]` | Timeouts, session length, accounts per Discord user, reminder interval, allowed nicknames, attempts per minute |
 | `[premium]` | Handling of licensed accounts |
 | `[limbo]` | Dimension and game mode of the waiting world |
 | `[messages]` | In-game messages in [MiniMessage](https://docs.advntr.dev/minimessage/format.html) format |
-| `[discord-messages]` | Bot messages with Discord Markdown |
+| `[discord-messages]` | Slash command descriptions and bot messages with Discord Markdown |
 
 ## Commands
 
