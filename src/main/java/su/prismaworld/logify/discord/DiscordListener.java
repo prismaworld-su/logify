@@ -3,15 +3,10 @@ package su.prismaworld.logify.discord;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
-import net.dv8tion.jda.api.entities.Message;
-import net.dv8tion.jda.api.entities.User;
-import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
+import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
-import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
-import net.dv8tion.jda.api.exceptions.ErrorHandler;
-import net.dv8tion.jda.api.exceptions.PermissionException;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
-import net.dv8tion.jda.api.requests.ErrorResponse;
+import net.dv8tion.jda.api.interactions.commands.OptionMapping;
 import org.slf4j.Logger;
 import su.prismaworld.logify.auth.AuthService;
 import su.prismaworld.logify.auth.LoginResolution;
@@ -23,7 +18,8 @@ import su.prismaworld.logify.config.LogifyConfig.DiscordMessages;
 import su.prismaworld.logify.text.Texts;
 
 /**
- * Принимает команды регистрации в канале и нажатия кнопок в запросах на вход.
+ * Принимает slash-команду регистрации и нажатия кнопок в запросах на вход.
+ * Ответы на команду регистрации эфемерные: их видит только тот, кто её вызвал.
  */
 public final class DiscordListener extends ListenerAdapter {
 
@@ -44,36 +40,39 @@ public final class DiscordListener extends ListenerAdapter {
     }
 
     @Override
-    public void onMessageReceived(MessageReceivedEvent event) {
-        if (!event.isFromGuild() || event.getChannel().getIdLong() != bot.registrationChannelId()) {
+    public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
+        if (!event.getName().equals(bot.commandName())) {
             return;
         }
-        User author = event.getAuthor();
-        if (author.isBot() || author.isSystem() || event.isWebhookMessage()) {
+        if (event.getChannelIdLong() != bot.registrationChannelId()) {
+            reply(event, format(messages.registrationWrongChannel(), "", ""));
             return;
         }
-        String[] words = event.getMessage().getContentRaw().strip().split("\\s+");
-        if (!words[0].equalsIgnoreCase(bot.command())) {
+        long userId = event.getUser().getIdLong();
+        if (!rateLimiter.tryAcquire(userId)) {
+            reply(event, format(messages.registrationRateLimited(), "", ""));
             return;
         }
-        delete(event.getMessage());
-
-        MessageChannel channel = event.getChannel();
-        if (!rateLimiter.tryAcquire(author.getIdLong())) {
-            bot.notifyUser(author, channel, messages.registrationRateLimited());
-            return;
-        }
-        Optional<String> code = words.length == 2 ? RegistrationCodes.normalize(words[1]) : Optional.empty();
+        String input = event.getOption(DiscordBot.CODE_OPTION, "", OptionMapping::getAsString);
+        Optional<String> code = RegistrationCodes.normalize(input);
         if (code.isEmpty()) {
-            bot.notifyUser(author, channel, format(messages.registrationUsage(), "", ""));
+            reply(event, format(messages.registrationUsage(), "", ""));
             return;
         }
-        authService.register(author.getIdLong(), code.get())
-                .thenAccept(outcome -> bot.notifyUser(author, channel, describe(outcome, code.get())))
-                .exceptionally(error -> {
-                    logger.error("Ошибка при обработке команды регистрации от {}", author.getId(), error);
-                    return null;
-                });
+
+        // Сохранение в базу может занять больше 3 секунд, которые Discord даёт на ответ
+        event.deferReply(true).queue();
+        authService.register(userId, code.get()).whenComplete((outcome, error) -> {
+            String text;
+            if (error == null) {
+                text = describe(outcome, code.get());
+            } else {
+                logger.error("Ошибка при обработке команды регистрации от {}", event.getUser().getId(), error);
+                text = format(messages.registrationError(), "", "");
+            }
+            event.getHook().editOriginal(text).queue(null,
+                    failure -> logger.warn("Не удалось ответить на команду регистрации {}", event.getUser().getId(), failure));
+        });
     }
 
     @Override
@@ -99,6 +98,10 @@ public final class DiscordListener extends ListenerAdapter {
                 .queue(null, error -> logger.warn("Не удалось обновить запрос на вход {}", button.username(), error));
     }
 
+    private static void reply(SlashCommandInteractionEvent event, String text) {
+        event.reply(text).setEphemeral(true).queue();
+    }
+
     private String describe(RegistrationOutcome outcome, String code) {
         String username = outcome.username() == null ? "" : outcome.username();
         String template = switch (outcome.status()) {
@@ -116,17 +119,8 @@ public final class DiscordListener extends ListenerAdapter {
                 "player", DiscordBot.escape(username),
                 "code", DiscordBot.escape(code),
                 "limit", Integer.toString(accountLimit),
-                "command", bot.command()
+                "command", bot.command(),
+                "channel", bot.registrationChannelMention()
         ));
-    }
-
-    private void delete(Message message) {
-        try {
-            message.delete().queue(null, new ErrorHandler()
-                    .ignore(ErrorResponse.UNKNOWN_MESSAGE)
-                    .handle(Throwable.class, error -> logger.warn("Не удалось удалить сообщение в канале регистрации", error)));
-        } catch (PermissionException e) {
-            logger.warn("Боту не хватает права «Управлять сообщениями» в канале регистрации: {}", e.getMessage());
-        }
     }
 }

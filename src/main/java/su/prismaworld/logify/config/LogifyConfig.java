@@ -31,11 +31,19 @@ public record LogifyConfig(
 
     /**
      * @param registrationChannelId ID канала регистрации, {@code 0}, если не задан
+     * @param commandName имя slash-команды регистрации без "/"
      */
-    public record DiscordSettings(String token, long registrationChannelId, String command, String activity) {
+    public record DiscordSettings(String token, long registrationChannelId, String commandName, String activity) {
 
         public boolean isConfigured() {
             return !token.isBlank() && registrationChannelId != 0;
+        }
+
+        /**
+         * Команда в том виде, в котором её набирают в Discord, например {@code /r}.
+         */
+        public String command() {
+            return "/" + commandName;
         }
     }
 
@@ -89,6 +97,9 @@ public record LogifyConfig(
      * Сообщения бота в Discord с плейсхолдерами вида {@code {player}}.
      */
     public record DiscordMessages(
+            String commandDescription,
+            String commandCodeDescription,
+            String registrationWrongChannel,
             String registrationSuccess,
             String registrationInvalidCode,
             String registrationUsage,
@@ -96,7 +107,6 @@ public record LogifyConfig(
             String registrationAlreadyRegistered,
             String registrationRateLimited,
             String registrationError,
-            String directMessagesClosed,
             String loginRequestTitle,
             String loginRequest,
             String loginApproveButton,
