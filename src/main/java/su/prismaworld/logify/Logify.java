@@ -32,7 +32,7 @@ import su.prismaworld.logify.storage.Database;
         id = "logify",
         name = "Logify",
         version = BuildConstants.VERSION,
-        description = "Вход на сервер с подтверждением через Discord",
+        description = "Discord login for Velocity: link nicknames to Discord and approve every login from a direct message",
         authors = {"loseex"},
         dependencies = {@Dependency(id = "limboapi")}
 )
